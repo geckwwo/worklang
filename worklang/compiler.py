@@ -1,4 +1,5 @@
 from .parser import Node, CallNode, ConstNode, IdenNode
+import struct
 
 class Encoder:
     @classmethod
@@ -12,6 +13,9 @@ class Encoder:
     @classmethod
     def int16(cls, i: int):
         return i.to_bytes(2, "big")
+    @classmethod
+    def float(cls, f: float):
+        return struct.pack("f", f)
 
 class Instruction:
     def __init__(self):
