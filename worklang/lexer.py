@@ -13,6 +13,8 @@ ALL_LETTERS_DIGITS = ALL_LETTERS + string.digits
 WHITESPACE = " \t\r\n\v"
 
 class TokenType(enum.Enum):
+    EOF = -1
+    
     Identifier = 1
     Number = 2
     String = 3
@@ -21,6 +23,11 @@ class TokenType(enum.Enum):
     ParenOpen = "("
     ParenClose = ")"
     Semicolon = ";"
+    Dot = "."
+    Comma = ","
+
+    QuestionMark = "?"
+    Eq = "="
 
 class Keyword(enum.Enum):
     Use = "использовать"
@@ -53,7 +60,7 @@ class Lexer:
     def run(self, data: str):
         self.idx = -1
         self.ch = None
-        self.text = data
+        self.text = data + "\n"
 
         self.next()
 
@@ -72,9 +79,16 @@ class Lexer:
                     self.next()
 
                 if iden.lower() in KEYWORDS:
-                    tokens.append(Token(TokenType.Keyword, Keyword(iden)))
+                    tokens.append(Token(TokenType.Keyword, Keyword(iden.lower())))
                 else:
                     tokens.append(Token(TokenType.Identifier, iden))
+            elif self.ch.isdigit():
+                num = ""
+                while self.ch is not None and self.ch.isdigit():
+                    num += self.ch
+                    self.next()
+
+                tokens.append(Token(TokenType.Number, int(num)))
             elif self.ch in "\"'":
                 quote = self.ch
                 self.next()
