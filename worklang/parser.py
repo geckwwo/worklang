@@ -19,6 +19,10 @@ class ConstNode(Node):
     def __init__(self, value: str | int | float | bool):
         self.value = value
 
+class ModuleDeclNode(Node):
+    def __init__(self, modname: list[str]):
+        self.modname = modname
+
 class ParserException(Exception):
     pass
 
@@ -44,15 +48,35 @@ class Parser:
 
     def root_statement(self):
         # TODO: keyword AND statement shit
-
-        # expr
-        v: Node = self.expr()
+        if self.tok.type == TokenType.Keyword:
+            if self.tok.value == Keyword.Module:
+                v = self.module_decl()
+            else:
+                raise NotImplementedError(f"Cannot process keyword {self.tok.value} in root context")
+        else:
+            # expr
+            v: Node = self.expr()
         
         assert self.tok.type == TokenType.Semicolon, "';' expected"
         self.next()
 
         return v
     
+    def module_decl(self):
+        self.next()
+        assert self.tok.type == TokenType.Identifier, "identifier expected"
+
+        modname: list[str] = []
+        while self.tok.type == TokenType.Identifier:
+            modname.append(self.tok.value)
+            self.next()
+
+            if self.tok.type == TokenType.Comma: # type: ignore
+                self.next()
+                continue
+            break
+        return ModuleDeclNode(modname)
+
     def expr(self):
         return self.call()
     

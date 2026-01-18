@@ -1,4 +1,4 @@
-from .parser import Node, CallNode, ConstNode, IdenNode
+from .parser import Node, CallNode, ConstNode, IdenNode, ModuleDeclNode
 import struct
 
 class Encoder:
@@ -17,20 +17,21 @@ class Encoder:
     def float(cls, f: float):
         return struct.pack("f", f)
 
-class Instruction:
-    def __init__(self):
-        raise NotImplementedError(f"Cannot instantiate this instruction ({self.__class__.__name__})")
-    def dump(self) -> bytes | bytearray:
-        raise NotImplementedError(f"Cannot dump this instruction ({self.__class__.__name__})")
+class ConstEntry:
+    INT = 1
+    FLOAT = 2
+    STRING = 3
 
-class SetConst(Instruction):
-    def __init__(self, const: str | int | float):
-        self.const = const
+class Opcodes:
+    PUSH_CONST = 0x01
 
-class GetGlobal(Instruction):
-    def __init__(self, slot: int, name: str):
-        self.slot = slot
-        self.name = name
+    GET_GLOBAL = 0x0A
+
+    INVOKE = 0x10
+
+    RETURN_NOTHING = 0x7F
+
+CONST_TYPE = int | float | str
 
 class Module:
     def __init__(self):
@@ -47,6 +48,7 @@ class Module:
     def dump(self):
         result = bytearray()
 
+        result.extend(Encoder.str(self.get_name()))
         result.extend(Encoder.int16(len(self.methods)))
         for name, method in self.methods.items():
             result.extend(Encoder.str(name))
@@ -61,32 +63,33 @@ class Method:
         self.method_args = method_args
 
         self.args = len(method_args)
-        self.locals = locals
-        self.used_slots: set[int] = set()
 
         self.bytecode: bytearray | bytes | None = None 
-    
-    def reserve_slot(self):
-        for i in range(self.args, self.args + self.locals):
-            if i not in self.used_slots:
-                self.used_slots.add(i)
-                return i
-            
-        slot = self.locals + self.args
-        self.locals += 1
+        self.const_pool: list[CONST_TYPE] = []
 
-        self.used_slots.add(slot)
-        return slot
-    
-    def release_slot(self, slot: int):
-        self.used_slots.remove(slot)
+    def get_signature(self):
+        return f"{self.method_name}/{len(self.method_args)}"
+
+    def push_const(self, const: CONST_TYPE):
+        if const in self.const_pool:
+            return self.const_pool.index(const)
+        self.const_pool.append(const)
+        return len(self.const_pool) - 1
 
     def dump(self):
         assert self.bytecode is not None
 
         result = bytearray()
         result.extend(Encoder.int16(self.args))
-        result.extend(Encoder.int16(self.locals))
+        
+        result.extend(Encoder.int32(len(self.const_pool)))
+        for entry in self.const_pool:
+            if isinstance(entry, str):
+                result.append(ConstEntry.STRING)
+                result.extend(Encoder.str(entry))
+            else:
+                raise NotImplementedError(f"Cannot serialize const pool entry {entry}")
+
         result.extend(Encoder.int32(len(self.bytecode)))
         result.extend(self.bytecode)
         return result
@@ -100,12 +103,13 @@ class Compiler:
 
     def compile_module(self, module_ast: list[Node]):
         self.module_stack.append(Module())
-        self.compile_method(self.module_stack[-1], "$global", [], module_ast)
-        
+        method = self.compile_method(self.module_stack[-1], "$global", [], module_ast)
         mod = self.module_stack.pop()
 
         assert mod.get_name() not in self.module_cache
         self.module_cache[mod.get_name()] = mod
+
+        mod.methods[method.get_signature()] = method
 
         return mod
 
@@ -125,6 +129,31 @@ class Compiler:
     def no_node_visitor(self, node: Node) -> bytearray:
         raise NotImplementedError(f"No visitor for node {node}")
     
+    def visit_node_ModuleDeclNode(self, node: ModuleDeclNode):
+        self.module_stack[-1].set_name(".".join(node.modname))
+        return bytearray()
+
+    def visit_node_CallNode(self, node: CallNode):
+        result = bytearray()
+
+        for arg in node.args:
+            result.extend(self.visit_node(arg))
+        
+        result.extend(Encoder.int16(len(node.args)))
+        result.extend(self.visit_node(node.callee))
+        result.append(Opcodes.INVOKE)
+
+        return result
+    
+    def visit_node_ConstNode(self, node: ConstNode):
+        ptr = self.method_stack[-1].push_const(node.value)
+
+        return bytearray([Opcodes.PUSH_CONST, *Encoder.int32(ptr)])
+    
+    def visit_node_IdenNode(self, node: IdenNode):
+        ptr = self.method_stack[-1].push_const(node.iden)
+        return bytearray([Opcodes.GET_GLOBAL, *Encoder.int32(ptr)])
+
     def dump(self):
         result = bytearray()
 
