@@ -43,7 +43,7 @@ class Parser:
         return body
 
     def root_statement(self):
-        # TODO: keyword shit
+        # TODO: keyword AND statement shit
 
         # expr
         v: Node = self.expr()
