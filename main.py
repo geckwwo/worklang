@@ -9,11 +9,11 @@ with open(sys.argv[1]) as inputf:
 
 tokens = worklang.lexer.Lexer().run(data)
 
-print(tokens)
+# print(tokens)
 
 ast = worklang.parser.Parser().run(tokens)
 
-print(ast)
+# print(ast)
 
 c = worklang.compiler.Compiler()
 c.compile_module(ast)
