@@ -1,5 +1,8 @@
-from .parser import Node, CallNode, ConstNode, IdenNode, ModuleDeclNode
+from .parser import Node, CallNode, ConstNode, IdenNode, ModuleDeclNode, DiscardNode, BinOpNode
+from .lexer import TokenType
 import struct
+
+MAGIC = b"Wklg\00\01\02\03"
 
 class Encoder:
     @classmethod
@@ -14,6 +17,13 @@ class Encoder:
     def int16(cls, i: int):
         return i.to_bytes(2, "big")
     @classmethod
+    def varint(cls, i: int):
+        if i == 0:
+            return bytearray([1, 0])
+        b = i.to_bytes((i.bit_length() + 8) // 8, "big", signed=True)
+        return bytearray([len(b), *b])
+
+    @classmethod
     def float(cls, f: float):
         return struct.pack("f", f)
 
@@ -23,13 +33,18 @@ class ConstEntry:
     STRING = 3
 
 class Opcodes:
+    NOP = 0x00 # not used by compiler, but must be implemented in VM
     PUSH_CONST = 0x01
 
     GET_GLOBAL = 0x0A
 
     INVOKE = 0x10
 
-    RETURN_NOTHING = 0x7F
+    ADD = 0x20
+    MULTIPLY = 0x21
+
+    RETURN = 0x7F
+    DISCARD = 0x80
 
 CONST_TYPE = int | float | str
 
@@ -68,7 +83,7 @@ class Method:
         self.const_pool: list[CONST_TYPE] = []
 
     def get_signature(self):
-        return f"{self.method_name}/{len(self.method_args)}"
+        return f"{self.method_name}"
 
     def push_const(self, const: CONST_TYPE):
         if const in self.const_pool:
@@ -87,6 +102,9 @@ class Method:
             if isinstance(entry, str):
                 result.append(ConstEntry.STRING)
                 result.extend(Encoder.str(entry))
+            elif isinstance(entry, int):
+                result.append(ConstEntry.INT)
+                result.extend(Encoder.varint(entry))
             else:
                 raise NotImplementedError(f"Cannot serialize const pool entry {entry}")
 
@@ -138,12 +156,21 @@ class Compiler:
 
         for arg in node.args:
             result.extend(self.visit_node(arg))
-        
-        result.extend(Encoder.int16(len(node.args)))
         result.extend(self.visit_node(node.callee))
         result.append(Opcodes.INVOKE)
+        result.extend(Encoder.int16(len(node.args)))
 
         return result
+    
+    def visit_node_BinOpNode(self, node: BinOpNode):
+        ops = {
+            TokenType.Plus: Opcodes.ADD,
+            TokenType.Multiply: Opcodes.MULTIPLY
+        }
+        return bytearray([*self.visit_node(node.left), *self.visit_node(node.right), ops[node.op]])
+
+    def visit_node_DiscardNode(self, node: DiscardNode):
+        return self.visit_node(node.value) + bytearray([Opcodes.DISCARD])
     
     def visit_node_ConstNode(self, node: ConstNode):
         ptr = self.method_stack[-1].push_const(node.value)
@@ -156,9 +183,10 @@ class Compiler:
 
     def dump(self):
         result = bytearray()
-
+        result.extend(MAGIC)
+        
+        result.extend(Encoder.int32(len(self.module_cache.values())))
         for module in self.module_cache.values():
-            result.extend(Encoder.str(module.get_name()))
             result.extend(module.dump())
 
         return result

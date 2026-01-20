@@ -29,6 +29,9 @@ class TokenType(enum.Enum):
     QuestionMark = "?"
     Eq = "="
 
+    Plus = "+"
+    Multiply = "*"
+
 class Keyword(enum.Enum):
     Use = "использовать"
     If = "если"

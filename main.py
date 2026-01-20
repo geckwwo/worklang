@@ -18,7 +18,7 @@ ast = worklang.parser.Parser().run(tokens)
 c = worklang.compiler.Compiler()
 c.compile_module(ast)
 
-print(bytecode := c.dump())
+bytecode = c.dump()
 
 vm = worklang.tempvm.VM()
 vm.load_from_bytes(bytecode)

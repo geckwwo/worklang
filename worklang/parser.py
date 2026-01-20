@@ -19,9 +19,19 @@ class ConstNode(Node):
     def __init__(self, value: str | int | float | bool):
         self.value = value
 
+class DiscardNode(Node):
+    def __init__(self, value: Node):
+        self.value = value
+
 class ModuleDeclNode(Node):
     def __init__(self, modname: list[str]):
         self.modname = modname
+
+class BinOpNode(Node):
+    def __init__(self, left: Node, op: TokenType, right: Node):
+        self.left = left
+        self.op = op
+        self.right = right
 
 class ParserException(Exception):
     pass
@@ -56,6 +66,7 @@ class Parser:
         else:
             # expr
             v: Node = self.expr()
+            v = DiscardNode(v)
         
         assert self.tok.type == TokenType.Semicolon, "';' expected"
         self.next()
@@ -78,7 +89,29 @@ class Parser:
         return ModuleDeclNode(modname)
 
     def expr(self):
-        return self.call()
+        return self.expr_add()
+    
+    def expr_add(self) -> Node:
+        v = self.expr_mul()
+
+        while self.tok.type in (TokenType.Plus,):
+            t = self.tok.type
+            self.next()
+            right = self.expr()
+            v = BinOpNode(v, t, right)
+
+        return v
+    
+    def expr_mul(self):
+        v = self.call()
+
+        while self.tok.type in (TokenType.Multiply,):
+            t = self.tok.type
+            self.next()
+            right = self.expr()
+            v = BinOpNode(v, t, right)
+
+        return v
     
     def call(self):
         v = self.atom()
