@@ -23,4 +23,4 @@ bytecode = c.dump()
 vm = worklang.tempvm.VM()
 vm.load_from_bytes(bytecode)
 
-vm.run("Главный", "$global")
+vm.executor_solo("Главный")

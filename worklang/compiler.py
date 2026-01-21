@@ -1,6 +1,7 @@
-from .parser import Node, CallNode, ConstNode, IdenNode, ModuleDeclNode, DiscardNode, BinOpNode
+from .parser import Node, CallNode, ConstNode, IdenNode, ModuleDeclNode, DiscardNode, BinOpNode, ProcDeclNode
 from .lexer import TokenType
 import struct
+from dataclasses import dataclass
 
 MAGIC = b"Wklg\00\01\02\03"
 
@@ -27,16 +28,24 @@ class Encoder:
     def float(cls, f: float):
         return struct.pack("f", f)
 
+@dataclass
+class RunnableEntry:
+    args: list[str]
+    bytecode: bytearray | bytes
+
 class ConstEntry:
     INT = 1
     FLOAT = 2
     STRING = 3
+    RUNNABLE = 4
 
 class Opcodes:
     NOP = 0x00 # not used by compiler, but must be implemented in VM
     PUSH_CONST = 0x01
 
-    GET_GLOBAL = 0x0A
+    GET = 0x0A
+    SET_GLOBAL = 0x0B
+    SET = 0x0C
 
     INVOKE = 0x10
 
@@ -46,12 +55,19 @@ class Opcodes:
     RETURN = 0x7F
     DISCARD = 0x80
 
-CONST_TYPE = int | float | str
+CONST_TYPE = int | float | str | RunnableEntry
 
 class Module:
     def __init__(self):
         self.name: str | None = None
-        self.methods: dict[str, Method] = {}
+        self.bytecode: bytearray | None = None
+        self.const_pool: list[CONST_TYPE] = []
+    
+    def push_const(self, const: CONST_TYPE):
+        if const in self.const_pool:
+            return self.const_pool.index(const)
+        self.const_pool.append(const)
+        return len(self.const_pool) - 1
 
     def set_name(self, name: str):
         self.name = name
@@ -61,42 +77,11 @@ class Module:
         return self.name
     
     def dump(self):
-        result = bytearray()
-
-        result.extend(Encoder.str(self.get_name()))
-        result.extend(Encoder.int16(len(self.methods)))
-        for name, method in self.methods.items():
-            result.extend(Encoder.str(name))
-            result.extend(method.dump())
-
-        return result
-
-class Method:
-    def __init__(self, module: Module, method_name: str, method_args: list[str], locals: int = 0):
-        self.module = module
-        self.method_name = method_name
-        self.method_args = method_args
-
-        self.args = len(method_args)
-
-        self.bytecode: bytearray | bytes | None = None 
-        self.const_pool: list[CONST_TYPE] = []
-
-    def get_signature(self):
-        return f"{self.method_name}"
-
-    def push_const(self, const: CONST_TYPE):
-        if const in self.const_pool:
-            return self.const_pool.index(const)
-        self.const_pool.append(const)
-        return len(self.const_pool) - 1
-
-    def dump(self):
         assert self.bytecode is not None
 
         result = bytearray()
-        result.extend(Encoder.int16(self.args))
-        
+
+        result.extend(Encoder.str(self.get_name()))        
         result.extend(Encoder.int32(len(self.const_pool)))
         for entry in self.const_pool:
             if isinstance(entry, str):
@@ -105,6 +90,13 @@ class Method:
             elif isinstance(entry, int):
                 result.append(ConstEntry.INT)
                 result.extend(Encoder.varint(entry))
+            elif isinstance(entry, RunnableEntry):
+                result.append(ConstEntry.RUNNABLE)
+                result.append(len(entry.args))
+                for i in entry.args:
+                    result.extend(Encoder.str(i))
+                result.extend(Encoder.int32(len(entry.bytecode)))
+                result.extend(entry.bytecode)
             else:
                 raise NotImplementedError(f"Cannot serialize const pool entry {entry}")
 
@@ -114,39 +106,41 @@ class Method:
 
 class Compiler:
     def __init__(self):
-        self.method_stack: list[Method] = []
         self.module_stack: list[Module] = []
 
         self.module_cache: dict[str, Module] = {}
 
     def compile_module(self, module_ast: list[Node]):
         self.module_stack.append(Module())
-        method = self.compile_method(self.module_stack[-1], "$global", [], module_ast)
+        bytecode = bytearray()
+
+        for i in module_ast:
+            bytecode.extend(self.visit_node(i))
         mod = self.module_stack.pop()
 
         assert mod.get_name() not in self.module_cache
         self.module_cache[mod.get_name()] = mod
 
-        mod.methods[method.get_signature()] = method
+        mod.bytecode = bytecode
 
         return mod
-
-    def compile_method(self, module: Module, method_name: str, method_args: list[str], method_ast: list[Node]):
-        self.method_stack.append(Method(module, method_name, method_args, len(method_args)))
-        method_bytecode = bytearray()
-
-        for i in method_ast:
-            method_bytecode.extend(self.visit_node(i))
-        
-        ctx = self.method_stack.pop()
-        ctx.bytecode = method_bytecode
-        return ctx
 
     def visit_node(self, node: Node) -> bytearray:
         return getattr(self, "visit_node_" + node.__class__.__name__, self.no_node_visitor)(node)
     def no_node_visitor(self, node: Node) -> bytearray:
         raise NotImplementedError(f"No visitor for node {node}")
     
+    def visit_node_ProcDeclNode(self, node: ProcDeclNode):
+        bytecode = bytearray()
+
+        for i in node.body:
+            bytecode.extend(self.visit_node(i))
+
+        ptr_runnable = self.module_stack[-1].push_const(RunnableEntry(node.args, bytecode))
+        ptr_name = self.module_stack[-1].push_const(node.name)
+
+        return bytearray([Opcodes.PUSH_CONST, *Encoder.int32(ptr_runnable), Opcodes.SET, *Encoder.int32(ptr_name)])
+
     def visit_node_ModuleDeclNode(self, node: ModuleDeclNode):
         self.module_stack[-1].set_name(".".join(node.modname))
         return bytearray()
@@ -173,13 +167,13 @@ class Compiler:
         return self.visit_node(node.value) + bytearray([Opcodes.DISCARD])
     
     def visit_node_ConstNode(self, node: ConstNode):
-        ptr = self.method_stack[-1].push_const(node.value)
+        ptr = self.module_stack[-1].push_const(node.value)
 
         return bytearray([Opcodes.PUSH_CONST, *Encoder.int32(ptr)])
     
     def visit_node_IdenNode(self, node: IdenNode):
-        ptr = self.method_stack[-1].push_const(node.iden)
-        return bytearray([Opcodes.GET_GLOBAL, *Encoder.int32(ptr)])
+        ptr = self.module_stack[-1].push_const(node.iden)
+        return bytearray([Opcodes.GET, *Encoder.int32(ptr)])
 
     def dump(self):
         result = bytearray()

@@ -4,28 +4,32 @@ from typing import cast
 from .compiler import ConstEntry, Opcodes, MAGIC
 from .rtobjects import *
 
-ConstType = int | str | float
-
-class WLMethod:
-    def __init__(self, module: 'WLModule', argcount: int, constpool: list[ConstType], bytecode: bytearray | bytes):
-        self.argcount = argcount
-        self.constpool = constpool
+class Runnable:
+    def __init__(self, module: 'WLModule', args: list[str], bytecode: bytes | bytearray):
+        self.module = module
+        self.args = args
         self.bytecode = bytecode
 
+    def __call__(self, executor: 'Executor', args: list[WLObject]):
+        ctx = RunnableContext(self.module, self.bytecode)
+        assert len(args) == len(self.args)
+        for my, given in zip(self.args, args):
+            ctx.locals()[my] = given
+        executor.push_ctx(ctx)
+
+ConstType = int | str | float | Runnable
+
 class WLModule:
-    def __init__(self, name: str, methods: dict[str, WLMethod]):
+    def __init__(self, name: str, root_runnable: Runnable, constpool: list[ConstType]):
         self.name = name
-        self.methods = methods
+        self.root_runnable = root_runnable
+        self.constpool = constpool
+        self.globals: dict[str, WLObject] = {} | cast(dict[str, WLObject], importlib.import_module("worklang.stdlib").defaults)
 
 class ExecutorStepResult(enum.Enum):
     CONTINUE = 1
     END = 2
     ASYNC_YIELD = 3
-
-class ModuleContext:
-    def __init__(self, module: WLModule):
-        self.module = module
-        self.globals: dict[str, WLObject] = {} | cast(dict[str, WLObject], importlib.import_module("worklang.stdlib").defaults)
 
 class BinOperation(enum.Enum):
     ADD = 1
@@ -47,12 +51,17 @@ def operate_bi(left: WLObject, right: WLObject, op: BinOperation):
         case _:
             raise NotImplementedError(f"cannot operate on {left.object_type}")
 
-class MethodContext:
-    def __init__(self, method: WLMethod):
-        self.method = method
-        self.locals: list[WLObject] = [NIL] * (method.argcount)
+class RunnableContext:
+    def __init__(self, module: WLModule, bytecode: bytearray | bytes):
+        self.module = module
+        self.localsx: dict[str, WLObject] = {}
         self.stack: list[WLObject] = []
-        self.bs = ByteStream(method.bytecode)
+        self.bs = ByteStream(bytecode)
+    
+    def globals(self):
+        return self.module.globals
+    def locals(self):
+        return self.localsx
 
     def step(self, executor: 'Executor', vm: 'VM') -> tuple[ExecutorStepResult, WLObject | None]:
         if self.bs.over():
@@ -63,19 +72,28 @@ class MethodContext:
             pass
         elif opcode == Opcodes.PUSH_CONST:
             ptr = self.bs.int32()
-            raw_obj = self.method.constpool[ptr]
+            raw_obj = self.module.constpool[ptr]
             if isinstance(raw_obj, str):
                 self.stack.append(WLObject(Primitives.String, raw_obj))
             elif isinstance(raw_obj, int):
                 self.stack.append(WLObject(Primitives.Number, raw_obj))
+            elif isinstance(raw_obj, Runnable):
+                self.stack.append(WLObject(Primitives.Runnable, raw_obj))
             else:
                 raise NotImplementedError(f"Unknown raw object type {raw_obj}")
-        elif opcode == Opcodes.GET_GLOBAL:
+        elif opcode == Opcodes.SET:
             ptr = self.bs.int32()
-            iden = self.method.constpool[ptr]
+            val = self.stack.pop()
+            self.locals()[cast(str, self.module.constpool[ptr])] = val
+        elif opcode == Opcodes.GET:
+            ptr = self.bs.int32()
+            iden = self.module.constpool[ptr]
 
             assert isinstance(iden, str)
-            self.stack.append(executor.mod_ctx.globals[iden])
+            if iden in executor.ctx().locals():
+                self.stack.append(executor.ctx().locals()[iden])
+            else:
+                self.stack.append(executor.ctx().globals()[iden])
         elif opcode == Opcodes.INVOKE:
             argcount = self.bs.int16()
             callee = self.stack.pop()
@@ -85,7 +103,7 @@ class MethodContext:
                 args.insert(0, self.stack.pop())
             
             assert callee.object_type == Primitives.Runnable
-            self.stack.append(callee.value(vm, args)) # type: ignore
+            self.stack.append(callee.value(executor, args)) # type: ignore
         elif opcode == Opcodes.DISCARD:
             self.stack.pop()
         elif opcode == Opcodes.MULTIPLY:
@@ -101,14 +119,34 @@ class MethodContext:
         return ExecutorStepResult.CONTINUE, None
 
 class Executor:
-    def __init__(self, mod_ctx: ModuleContext, method_ctx: MethodContext):
-        self.mod_ctx = mod_ctx
-        self.method_ctx = method_ctx
+    def __init__(self, vm: 'VM'):
+        self.ctx_stack: list[RunnableContext] = []
+        self.vm = vm
+
+    def push_ctx(self, ctx: RunnableContext):
+        self.ctx_stack.append(ctx)
+    def pop_ctx(self):
+        return self.ctx_stack.pop()
+    def ctx(self):
+        return self.ctx_stack[-1]
 
     def step(self, vm: 'VM'):
-        return self.method_ctx.step(self, vm)
+        r, v = self.ctx().step(self, vm)
+        if r == ExecutorStepResult.CONTINUE:
+            return r
+        elif r == ExecutorStepResult.END:
+            self.pop_ctx()
+
+            assert v is not None
+            if len(self.ctx_stack) > 0:
+                self.ctx().stack.append(v)
+                return ExecutorStepResult.CONTINUE
+            return ExecutorStepResult.END
+        else:
+            raise NotImplementedError("asdf")
 
 class ByteStream:
+
     def __init__(self, arr: bytearray | bytes):
         self.arr = arr
         self.idx = 0
@@ -153,46 +191,50 @@ class VM:
         module_count = s.int32()
         for _ in range(module_count):
             module_name = s.str()
-            method_count = s.int16()
 
-            methods: dict[str, WLMethod] = {}
-            module = WLModule(module_name, methods)
+            const_pool: list[ConstType] = []
+            module = WLModule(module_name, cast(Runnable, None), const_pool)
 
-            for _ in range(method_count):
-                method_signature = s.str()
-                arg_count = s.int16()
+            const_count = s.int32()
+            for _ in range(const_count):
+                typ = s.byte()
+                if typ == ConstEntry.STRING:
+                    const_pool.append(s.str())
+                elif typ == ConstEntry.INT:
+                    const_pool.append(s.varint())
+                elif typ == ConstEntry.RUNNABLE:
+                    argcount = s.byte()
+                    args: list[str] = []
+                    for _ in range(argcount):
+                        args.append(s.str())
+                    bytecode_len = s.int32()
+                    bytecode = s.bytes(bytecode_len)
 
-                const_count = s.int32()
-                const_pool: list[int | float | str] = []
-                for _ in range(const_count):
-                    typ = s.byte()
-                    if typ == ConstEntry.STRING:
-                        const_pool.append(s.str())
-                    elif typ == ConstEntry.INT:
-                        const_pool.append(s.varint())
-                    else:
-                        raise NotImplementedError(f"Unknown const pool entry {typ}")
-                
-                bytecode_length = s.int32()
-                bytecode = s.bytes(bytecode_length)
-                methods[method_signature] = WLMethod(module, arg_count, const_pool, bytecode)
+                    const_pool.append(Runnable(module, args, bytecode))
+                else:
+                    raise NotImplementedError(f"Unknown const pool entry {typ}")
+            
+            bytecode_length = s.int32()
+            module.root_runnable = Runnable(module, [], s.bytes(bytecode_length))
+            
             self.modules[module_name] = module
 
-    def run(self, module: str, method_signature: str):
-        mod_ctx = ModuleContext(self.modules[module])
-        method_ctx = MethodContext(mod_ctx.module.methods[method_signature])
-        executor = Executor(mod_ctx, method_ctx)
+    def executor_solo(self, module: str):
+        mod = self.modules[module]
+        ctx = RunnableContext(mod, mod.root_runnable.bytecode)
+
+        executor = Executor(self)
+        executor.push_ctx(ctx)
 
         self.executor_stack.append(executor)
         while True:
+            if len(self.executor_stack) == 0:
+                break
             ex = self.executor_stack[-1]
-            res, val = ex.step(self)
+            res = ex.step(self)
             if res == ExecutorStepResult.CONTINUE:
                 pass
             elif res == ExecutorStepResult.END:
                 self.executor_stack.pop()
-                if len(self.executor_stack) == 0:
-                    break
-                self.executor_stack[-1].method_ctx.stack.append(cast(WLObject, val))
             else:
                 raise NotImplementedError(f"Step {res}")

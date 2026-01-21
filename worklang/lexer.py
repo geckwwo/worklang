@@ -36,6 +36,8 @@ class Keyword(enum.Enum):
     Use = "использовать"
     If = "если"
     Module = "модуль"
+    Proc = "процедура"
+    End = "конец"
 
 KEYWORDS = list(x.value for x in Keyword)
 TOKENTYPES = list(x.value for x in TokenType)

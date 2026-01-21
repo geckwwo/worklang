@@ -33,6 +33,12 @@ class BinOpNode(Node):
         self.op = op
         self.right = right
 
+class ProcDeclNode(Node):
+    def __init__(self, name: str, args: list[str], body: list[Node]):
+        self.name = name
+        self.args = args
+        self.body = body
+
 class ParserException(Exception):
     pass
 
@@ -57,12 +63,23 @@ class Parser:
         return body
 
     def root_statement(self):
-        # TODO: keyword AND statement shit
         if self.tok.type == TokenType.Keyword:
             if self.tok.value == Keyword.Module:
                 v = self.module_decl()
+
+                assert self.tok.type == TokenType.Semicolon, "';' expected"
+                self.next()
+
+                return v
+
+        return self.statement()
+    
+    def statement(self):
+        if self.tok.type == TokenType.Keyword:
+            if self.tok.value == Keyword.Proc:
+                return self.proc_decl()
             else:
-                raise NotImplementedError(f"Cannot process keyword {self.tok.value} in root context")
+                raise NotImplementedError(f"Cannot process keyword {self.tok.value} in statement context")
         else:
             # expr
             v: Node = self.expr()
@@ -72,6 +89,36 @@ class Parser:
         self.next()
 
         return v
+
+    def proc_decl(self):
+        self.next()
+
+        assert self.tok.type == TokenType.Identifier, "identifier expected"
+        proc_name = self.tok.value
+        self.next()
+
+        assert self.tok.type == TokenType.ParenOpen, "'(' expected"
+        self.next()
+
+        args: list[str] = []
+        while self.tok.type != TokenType.ParenClose:
+            assert self.tok.type == TokenType.Identifier, "identifier expected"
+            args.append(self.tok.value)
+            self.next()
+
+            if self.tok.type == TokenType.ParenClose:
+                break
+
+            assert self.tok.type == TokenType.Comma, "',' expected"
+            self.next()
+        self.next()
+
+        body: list[Node] = []
+        while self.tok.value != Keyword.End:
+            body.append(self.statement())
+        self.next()
+
+        return ProcDeclNode(proc_name, args, body)
     
     def module_decl(self):
         self.next()
@@ -86,6 +133,7 @@ class Parser:
                 self.next()
                 continue
             break
+
         return ModuleDeclNode(modname)
 
     def expr(self):
@@ -148,3 +196,4 @@ class Parser:
             return v
         else:
             raise ParserException(f"Unknown atom {self.tok}")
+        
