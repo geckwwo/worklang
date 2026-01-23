@@ -9,9 +9,10 @@ class Runnable:
         self.module = module
         self.args = args
         self.bytecode = bytecode
+        self.parent_scope: RunnableContext | None = None
 
     def __call__(self, executor: 'Executor', args: list[WLObject]):
-        ctx = RunnableContext(self.module, self.bytecode)
+        ctx = RunnableContext(self.module, self.bytecode, self.parent_scope)
         assert len(args) == len(self.args)
         for my, given in zip(self.args, args):
             ctx.locals()[my] = given
@@ -52,12 +53,27 @@ def operate_bi(left: WLObject, right: WLObject, op: BinOperation):
             raise NotImplementedError(f"cannot operate on {left.object_type}")
 
 class RunnableContext:
-    def __init__(self, module: WLModule, bytecode: bytearray | bytes):
+    def __init__(self, module: WLModule, bytecode: bytearray | bytes, parent: 'RunnableContext | None'):
         self.module = module
         self.localsx: dict[str, WLObject] = {}
         self.stack: list[WLObject] = []
         self.bs = ByteStream(bytecode)
+        self.parent: RunnableContext | None = parent
     
+    def has(self, name: str):
+        if name in self.locals():
+            return True
+        if self.parent and self.parent.has(name):
+            return True
+        return name in self.module.globals
+
+    def get(self, name: str) -> WLObject:
+        if name in self.locals():
+            return self.locals()[name]
+        if self.parent and self.parent.has(name):
+            return self.parent.get(name)
+        return self.module.globals[name]
+
     def globals(self):
         return self.module.globals
     def locals(self):
@@ -90,10 +106,7 @@ class RunnableContext:
             iden = self.module.constpool[ptr]
 
             assert isinstance(iden, str)
-            if iden in executor.ctx().locals():
-                self.stack.append(executor.ctx().locals()[iden])
-            else:
-                self.stack.append(executor.ctx().globals()[iden])
+            self.stack.append(executor.ctx().get(iden))
         elif opcode == Opcodes.INVOKE:
             argcount = self.bs.int16()
             callee = self.stack.pop()
@@ -114,6 +127,13 @@ class RunnableContext:
             right = self.stack.pop()
             left = self.stack.pop()
             self.stack.append(operate_bi(left, right, BinOperation.ADD))
+        elif opcode == Opcodes.RETURN:
+            return ExecutorStepResult.END, self.stack.pop()
+        elif opcode == Opcodes.INJECT_PARENT_SCOPE:
+            v = self.stack[-1]
+            assert v.object_type == Primitives.Runnable
+            r: Runnable = v.value
+            r.parent_scope = self
         else:
             raise NotImplementedError(f"Unknown opcode {hex(opcode)}")
         return ExecutorStepResult.CONTINUE, None
@@ -221,7 +241,7 @@ class VM:
 
     def executor_solo(self, module: str):
         mod = self.modules[module]
-        ctx = RunnableContext(mod, mod.root_runnable.bytecode)
+        ctx = RunnableContext(mod, mod.root_runnable.bytecode, None)
 
         executor = Executor(self)
         executor.push_ctx(ctx)

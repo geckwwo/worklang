@@ -1,4 +1,4 @@
-from .parser import Node, CallNode, ConstNode, IdenNode, ModuleDeclNode, DiscardNode, BinOpNode, ProcDeclNode
+from .parser import Node, CallNode, ConstNode, IdenNode, ModuleDeclNode, DiscardNode, BinOpNode, AnonProcDeclNode, AssignNode, ForNode, ReturnNode
 from .lexer import TokenType
 import struct
 from dataclasses import dataclass
@@ -42,12 +42,14 @@ class ConstEntry:
 class Opcodes:
     NOP = 0x00 # not used by compiler, but must be implemented in VM
     PUSH_CONST = 0x01
+    PUSH_NIL = 0x02
 
     GET = 0x0A
     SET_GLOBAL = 0x0B
     SET = 0x0C
 
     INVOKE = 0x10
+    INJECT_PARENT_SCOPE = 0x11
 
     ADD = 0x20
     MULTIPLY = 0x21
@@ -130,16 +132,31 @@ class Compiler:
     def no_node_visitor(self, node: Node) -> bytearray:
         raise NotImplementedError(f"No visitor for node {node}")
     
-    def visit_node_ProcDeclNode(self, node: ProcDeclNode):
+    def visit_node_AssignNode(self, node: AssignNode):
+        assert isinstance(node.to, IdenNode), f"TODO {node.to} {type(node.to)}"
+
+        name_ptr = self.module_stack[-1].push_const(node.to.iden)
+
+        return bytearray([*self.visit_node(node.value), Opcodes.SET, *Encoder.int32(name_ptr)])
+
+    def visit_node_ReturnNode(self, node: ReturnNode):
+        if node.value is None:
+            return bytearray([Opcodes.PUSH_NIL, Opcodes.RETURN])
+        return bytearray([*self.visit_node(node.value), Opcodes.RETURN])
+
+    def visit_node_ForNode(self, node: ForNode):
+        assert False
+        return bytearray([])
+
+    def visit_node_AnonProcDeclNode(self, node: AnonProcDeclNode):
         bytecode = bytearray()
 
         for i in node.body:
             bytecode.extend(self.visit_node(i))
 
         ptr_runnable = self.module_stack[-1].push_const(RunnableEntry(node.args, bytecode))
-        ptr_name = self.module_stack[-1].push_const(node.name)
 
-        return bytearray([Opcodes.PUSH_CONST, *Encoder.int32(ptr_runnable), Opcodes.SET, *Encoder.int32(ptr_name)])
+        return bytearray([Opcodes.PUSH_CONST, *Encoder.int32(ptr_runnable), Opcodes.INJECT_PARENT_SCOPE])
 
     def visit_node_ModuleDeclNode(self, node: ModuleDeclNode):
         self.module_stack[-1].set_name(".".join(node.modname))

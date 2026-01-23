@@ -10,9 +10,12 @@ with open(sys.argv[1]) as inputf:
 tokens = worklang.lexer.Lexer().run(data)
 
 # print(tokens)
-
-ast = worklang.parser.Parser().run(tokens)
-
+parser = worklang.parser.Parser()
+try:
+    ast = parser.run(tokens)
+except Exception as e:
+    print(f"Parser error around token {parser.tok}")
+    raise e from None
 # print(ast)
 
 c = worklang.compiler.Compiler()

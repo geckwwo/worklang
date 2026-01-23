@@ -33,10 +33,24 @@ class BinOpNode(Node):
         self.op = op
         self.right = right
 
-class ProcDeclNode(Node):
-    def __init__(self, name: str, args: list[str], body: list[Node]):
-        self.name = name
+class ReturnNode(Node):
+    def __init__(self, value: Node | None):
+        self.value = value
+
+class AnonProcDeclNode(Node):
+    def __init__(self, args: list[str], body: list[Node]):
         self.args = args
+        self.body = body
+
+class AssignNode(Node):
+    def __init__(self, to: Node, value: Node):
+        self.to = to
+        self.value = value
+
+class ForNode(Node):
+    def __init__(self, var: str, value: Node, body: list[Node]):
+        self.var = var
+        self.value = value
         self.body = body
 
 class ParserException(Exception):
@@ -78,17 +92,52 @@ class Parser:
         if self.tok.type == TokenType.Keyword:
             if self.tok.value == Keyword.Proc:
                 return self.proc_decl()
+            elif self.tok.value == Keyword.Return:
+                v = self.return_stmt()
+            elif self.tok.value == Keyword.For:
+                return self.for_stmt()
             else:
                 raise NotImplementedError(f"Cannot process keyword {self.tok.value} in statement context")
         else:
             # expr
             v: Node = self.expr()
             v = DiscardNode(v)
+
+            if self.tok.type == TokenType.Eq:
+                self.next()
+                value = self.expr()
+                v = AssignNode(v.value, value)
         
         assert self.tok.type == TokenType.Semicolon, "';' expected"
         self.next()
 
         return v
+
+    def return_stmt(self):
+        self.next()
+        if self.tok.type == TokenType.Semicolon:
+            return ReturnNode(None)
+        expr = self.expr()
+        return ReturnNode(expr)
+    
+    def for_stmt(self):
+        self.next()
+
+        assert self.tok.type == TokenType.Identifier, "identifier expected"
+        var_name = self.tok.value
+        self.next()
+
+        assert self.tok.type == TokenType.Keyword and self.tok.value == Keyword.In, "'в' expected"
+        self.next()
+
+        value = self.expr()
+
+        body: list[Node] = []
+        while self.tok.value != Keyword.End: # type: ignore
+            body.append(self.statement())
+        self.next()
+
+        return ForNode(var_name, value, body)
 
     def proc_decl(self):
         self.next()
@@ -97,28 +146,7 @@ class Parser:
         proc_name = self.tok.value
         self.next()
 
-        assert self.tok.type == TokenType.ParenOpen, "'(' expected"
-        self.next()
-
-        args: list[str] = []
-        while self.tok.type != TokenType.ParenClose:
-            assert self.tok.type == TokenType.Identifier, "identifier expected"
-            args.append(self.tok.value)
-            self.next()
-
-            if self.tok.type == TokenType.ParenClose:
-                break
-
-            assert self.tok.type == TokenType.Comma, "',' expected"
-            self.next()
-        self.next()
-
-        body: list[Node] = []
-        while self.tok.value != Keyword.End:
-            body.append(self.statement())
-        self.next()
-
-        return ProcDeclNode(proc_name, args, body)
+        return AssignNode(IdenNode(proc_name), self.anon_proc(no_skip=True))
     
     def module_decl(self):
         self.next()
@@ -194,6 +222,35 @@ class Parser:
             v = IdenNode(self.tok.value)
             self.next()
             return v
-        else:
-            raise ParserException(f"Unknown atom {self.tok}")
+        elif self.tok.type == TokenType.Keyword:
+            if self.tok.value == Keyword.Proc:
+                return self.anon_proc()
+        raise ParserException(f"Unknown atom {self.tok}")
+    
+    def anon_proc(self, no_skip: bool = False):
+        if not no_skip:
+            self.next()
+
+        assert self.tok.type == TokenType.ParenOpen, "'(' expected"
+        self.next()
+
+        args: list[str] = []
+        while self.tok.type != TokenType.ParenClose: # type: ignore
+            assert self.tok.type == TokenType.Identifier, "identifier expected"
+            args.append(self.tok.value)
+            self.next()
+
+            if self.tok.type == TokenType.ParenClose:
+                break
+
+            assert self.tok.type == TokenType.Comma, "',' expected"
+            self.next()
+        self.next()
+
+        body: list[Node] = []
+        while self.tok.value != Keyword.End:
+            body.append(self.statement())
+        self.next()
+
+        return AnonProcDeclNode(args, body)
         

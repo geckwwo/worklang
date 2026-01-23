@@ -7,7 +7,7 @@ CYRILLIC_UPPER = ''.join(chr(c) for c in range(0x0410, 0x042F + 1))
 CYRILLIC_NON_STANDARD = 'ёЁєЄіїІґҐ'
 
 CYRILLIC_LETTERS = CYRILLIC_LOWER + CYRILLIC_UPPER + CYRILLIC_NON_STANDARD
-ALL_LETTERS = string.ascii_letters + CYRILLIC_LETTERS
+ALL_LETTERS = string.ascii_letters + CYRILLIC_LETTERS + "_"
 ALL_LETTERS_DIGITS = ALL_LETTERS + string.digits
 
 WHITESPACE = " \t\r\n\v"
@@ -38,6 +38,9 @@ class Keyword(enum.Enum):
     Module = "модуль"
     Proc = "процедура"
     End = "конец"
+    Return = "вернуть"
+    For = "для"
+    In = "в"
 
 KEYWORDS = list(x.value for x in Keyword)
 TOKENTYPES = list(x.value for x in TokenType)
