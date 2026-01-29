@@ -3,6 +3,8 @@
 - Add iterator structure
 - Add classes
 - Add a better stdlib architecture
+- In-code documentation? And docgen util
+- Documentation for the language (and native stdlib)
 
 # Standard Library TODOs
 - SQLite
@@ -11,6 +13,7 @@
 - HTML manip library
 - Annotation helper
 - Interface helper
+- FFI tool
 
 # DejaVu projects
 - Data sources (custom spreadsheet thing?) and manipulation utilities (for SQLite too)
