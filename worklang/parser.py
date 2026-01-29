@@ -53,6 +53,35 @@ class ForNode(Node):
         self.value = value
         self.body = body
 
+class UseNode(Node):
+    def __init__(self, name: list[str], as_name: str):
+        self.name = name
+        self.as_name = as_name
+
+class AttrNode(Node):
+    def __init__(self, obj: Node, attr: str):
+        self.obj = obj
+        self.attr = attr
+
+class TagNode(Node):
+    def __init__(self, tag: str, value: Node | None):
+        self.tag = tag
+        self.value = value
+
+class AssignAndReturnNode(Node):
+    def __init__(self, to: Node, value: Node):
+        self.to = to
+        self.value = value
+
+class WhileNode(Node):
+    def __init__(self, cond: Node, body: list[Node]):
+        self.cond = cond
+        self.body = body
+
+class DeclWrapNode(Node):
+    def __init__(self, value: Node):
+        self.value = value
+
 class ParserException(Exception):
     pass
 
@@ -77,37 +106,74 @@ class Parser:
         return body
 
     def root_statement(self):
+        v = None
         if self.tok.type == TokenType.Keyword:
             if self.tok.value == Keyword.Module:
                 v = self.module_decl()
+            elif self.tok.value == Keyword.Use:
+                v = self.use()
 
-                assert self.tok.type == TokenType.Semicolon, "';' expected"
-                self.next()
+        if v is not None:
+            assert self.tok.type == TokenType.Semicolon, "';' expected"
+            self.next()
 
-                return v
+            return v
 
         return self.statement()
     
+    def use(self):
+        self.next()
+
+        v: list[str] = []
+        as_name: str | None = None
+
+        assert self.tok.type == TokenType.Identifier, "identifier expected"
+        v.append(self.tok.value)
+        self.next()
+
+        while self.tok.type == TokenType.Dot: # type: ignore
+            self.next()
+
+            assert self.tok.type == TokenType.Identifier, "identifier expected"
+            v.append(self.tok.value)
+            self.next()
+        
+        if self.tok.type == TokenType.Keyword and self.tok.value == Keyword.As: # type: ignore
+            self.next()
+
+            assert self.tok.type == TokenType.Identifier, "identifier expected"
+            as_name = self.tok.value # type: ignore
+            self.next()
+        
+        if as_name is None:
+            as_name = v[-1]
+        
+        return UseNode(v, as_name)
+
+
     def statement(self):
         if self.tok.type == TokenType.Keyword:
-            if self.tok.value == Keyword.Proc:
-                return self.proc_decl()
-            elif self.tok.value == Keyword.Return:
+            if self.tok.value == Keyword.Return:
                 v = self.return_stmt()
             elif self.tok.value == Keyword.For:
                 return self.for_stmt()
+            elif self.tok.value == Keyword.While:
+                return self.while_stmt()
             else:
                 raise NotImplementedError(f"Cannot process keyword {self.tok.value} in statement context")
         else:
             # expr
             v: Node = self.expr()
+            if isinstance(v, DeclWrapNode):
+                return DiscardNode(v.value)
+            
             v = DiscardNode(v)
 
-            if self.tok.type == TokenType.Eq:
+            if self.tok.type == TokenType.Assign:
                 self.next()
                 value = self.expr()
                 v = AssignNode(v.value, value)
-        
+
         assert self.tok.type == TokenType.Semicolon, "';' expected"
         self.next()
 
@@ -138,16 +204,19 @@ class Parser:
         self.next()
 
         return ForNode(var_name, value, body)
-
-    def proc_decl(self):
-        self.next()
-
-        assert self.tok.type == TokenType.Identifier, "identifier expected"
-        proc_name = self.tok.value
-        self.next()
-
-        return AssignNode(IdenNode(proc_name), self.anon_proc(no_skip=True))
     
+    def while_stmt(self):
+        self.next()
+
+        cond = self.expr()
+        body: list[Node] = []
+        
+        while self.tok.value != Keyword.End:
+            body.append(self.statement())
+        self.next()
+
+        return WhileNode(cond, body)
+
     def module_decl(self):
         self.next()
         assert self.tok.type == TokenType.Identifier, "identifier expected"
@@ -190,7 +259,7 @@ class Parser:
         return v
     
     def call(self):
-        v = self.atom()
+        v = self.attrs()
 
         while self.tok.type == TokenType.ParenOpen:
             self.next()
@@ -205,6 +274,18 @@ class Parser:
             self.next()
 
             v = CallNode(v, args)
+        return v
+    
+    def attrs(self):
+        v = self.atom()
+
+        while self.tok.type == TokenType.Dot:
+            self.next()
+
+            assert self.tok.type == TokenType.Identifier, "identifier expected"
+            v = AttrNode(v, self.tok.value)
+            self.next()
+
         return v
     
     def atom(self) -> Node:
@@ -224,11 +305,35 @@ class Parser:
             return v
         elif self.tok.type == TokenType.Keyword:
             if self.tok.value == Keyword.Proc:
-                return self.anon_proc()
+                return self.anon_proc([])
+        elif self.tok.type == TokenType.QuestionMark:
+            annos: list[Node] = []
+            while self.tok.type == TokenType.QuestionMark:
+                self.next()
+                annos.append(self.expr())
+            return self.anon_proc(annos)
+        elif self.tok.type == TokenType.Colon:
+            self.next()
+
+            assert self.tok.type == TokenType.Identifier, "identifier expected"
+            name = self.tok.value
+            self.next()
+
+            val = None
+            if self.tok.type == TokenType.Assign:
+                self.next()
+                val = self.expr()
+
+            return TagNode(name, val)
         raise ParserException(f"Unknown atom {self.tok}")
     
-    def anon_proc(self, no_skip: bool = False):
-        if not no_skip:
+    def anon_proc(self, annotations: list[Node]):
+        assert self.tok.type == TokenType.Keyword and self.tok.value == Keyword.Proc, "procedure expected"
+        self.next()
+        
+        proc_name: str | None = None
+        if self.tok.type == TokenType.Identifier: # type: ignore
+            proc_name = self.tok.value # type: ignore
             self.next()
 
         assert self.tok.type == TokenType.ParenOpen, "'(' expected"
@@ -237,7 +342,7 @@ class Parser:
         args: list[str] = []
         while self.tok.type != TokenType.ParenClose: # type: ignore
             assert self.tok.type == TokenType.Identifier, "identifier expected"
-            args.append(self.tok.value)
+            args.append(self.tok.value) # type: ignore
             self.next()
 
             if self.tok.type == TokenType.ParenClose:
@@ -248,9 +353,15 @@ class Parser:
         self.next()
 
         body: list[Node] = []
-        while self.tok.value != Keyword.End:
+        while self.tok.value != Keyword.End: # type: ignore
             body.append(self.statement())
         self.next()
 
-        return AnonProcDeclNode(args, body)
+        decl_node = AnonProcDeclNode(args, body)
+        for i in reversed(annotations):
+            decl_node = CallNode(i, [decl_node])
+
+        if proc_name is not None:
+            return DeclWrapNode(AssignAndReturnNode(IdenNode(proc_name), decl_node))
+        return decl_node
         

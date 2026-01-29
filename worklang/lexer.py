@@ -23,11 +23,14 @@ class TokenType(enum.Enum):
     ParenOpen = "("
     ParenClose = ")"
     Semicolon = ";"
+    Colon = ":"
     Dot = "."
     Comma = ","
 
     QuestionMark = "?"
-    Eq = "="
+    
+    Assign = 1001
+    Equ = 1002
 
     Plus = "+"
     Multiply = "*"
@@ -35,6 +38,10 @@ class TokenType(enum.Enum):
 class Keyword(enum.Enum):
     Use = "использовать"
     If = "если"
+    Then = "тогда"
+    New = "новый"
+    While = "пока"
+    As = "как"
     Module = "модуль"
     Proc = "процедура"
     End = "конец"
@@ -109,7 +116,20 @@ class Lexer:
                 self.next()
 
                 tokens.append(Token(TokenType.String, s))
+            elif self.ch == "=":
+                self.next()
+                if self.ch == "=":
+                    self.next()
+                    tokens.append(Token(TokenType.Equ))
+                else:
+                    tokens.append(Token(TokenType.Assign))
             else:
                 raise LexerException(f"Неизвестный символ '{self.ch}'")
 
         return tokens
+    
+    def save(self):
+        return self.idx
+    def restore(self, idx: int):
+        self.idx = idx - 1
+        self.next()
