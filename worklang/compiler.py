@@ -1,4 +1,4 @@
-from .parser import Node, CallNode, ConstNode, IdenNode, ModuleDeclNode, DiscardNode, BinOpNode, AnonProcDeclNode, AssignNode, ForNode, ReturnNode
+from .parser import Node, CallNode, ConstNode, IdenNode, ModuleDeclNode, DiscardNode, BinOpNode, AnonProcDeclNode, AssignNode, ForNode, ReturnNode, AssignAndReturnNode, AttrNode, WhileNode, DeclWrapNode, TagNode, UseNode
 from .lexer import TokenType
 import struct
 from dataclasses import dataclass
@@ -132,6 +132,14 @@ class Compiler:
     def no_node_visitor(self, node: Node) -> bytearray:
         raise NotImplementedError(f"No visitor for node {node}")
     
+    def visit_node_UseNode(self, node: UseNode):
+        return self.visit_node(AssignNode(IdenNode(node.as_name), CallNode(IdenNode("__СисВызов_ИмпортМодуля"), [ConstNode(".".join(node.name))])))
+    
+    def visit_node_TagNode(self, node: TagNode):
+        if node.value is None:
+            return self.visit_node(CallNode(IdenNode("__СисВызов_СоздатьТэг1"), [ConstNode(node.tag)]))
+        return self.visit_node(CallNode(IdenNode("__СисВызов_СоздатьТэг2"), [ConstNode(node.tag), node.value]))
+
     def visit_node_AssignNode(self, node: AssignNode):
         assert isinstance(node.to, IdenNode), f"TODO {node.to} {type(node.to)}"
 
