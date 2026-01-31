@@ -21,9 +21,9 @@ except Exception as e:
 c = worklang.compiler.Compiler()
 c.compile_module(ast)
 
-bytecode = c.dump()
+vfs = c.dump_vfs()
 
 vm = worklang.tempvm.VM()
-vm.load_from_bytes(bytecode)
+vm.add_modsource(worklang.tempvm.VirtualSource(vfs))
 
-vm.executor_solo("Главный")
+vm.load_module("Главный")

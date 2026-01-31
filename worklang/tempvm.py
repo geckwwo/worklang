@@ -1,7 +1,7 @@
 import enum
 import importlib
 from typing import cast
-from .compiler import ConstEntry, Opcodes, MAGIC
+from .compiler import ConstEntry, Opcodes
 from .rtobjects import *
 
 class Runnable:
@@ -197,50 +197,70 @@ class ByteStream:
     def over(self):
         return self.idx >= len(self.arr)
 
+class ModSource:
+    def get_module(self, name: str) -> bytearray | bytes | None:
+        raise NotImplementedError
+class VirtualSource(ModSource):
+    def __init__(self, mods: dict[str, bytearray | bytes]):
+        self.mods = mods
+
+    def get_module(self, name: str):
+        for mod_name, code in self.mods.items():
+            if mod_name == name:
+                return code            
+
 class VM:
     def __init__(self):
-        self.modules: dict[str, WLModule] = {}
+        self.module_cache: dict[str, WLModule] = {}
         self.executor_stack: list[Executor] = []
+        self.sources: list[ModSource] = []
+
+    def add_modsource(self, src: ModSource):
+        self.sources.append(src)
 
     def load_from_bytes(self, thing: bytearray | bytes):
         s = ByteStream(thing)
+        module_name = s.str()
 
-        magic = s.bytes(8)
-        assert magic == MAGIC, "Wrong magic"
+        const_pool: list[ConstType] = []
+        module = WLModule(module_name, cast(Runnable, None), const_pool)
 
-        module_count = s.int32()
-        for _ in range(module_count):
-            module_name = s.str()
+        const_count = s.int32()
+        for _ in range(const_count):
+            typ = s.byte()
+            if typ == ConstEntry.STRING:
+                const_pool.append(s.str())
+            elif typ == ConstEntry.INT:
+                const_pool.append(s.varint())
+            elif typ == ConstEntry.RUNNABLE:
+                argcount = s.byte()
+                args: list[str] = []
+                for _ in range(argcount):
+                    args.append(s.str())
+                bytecode_len = s.int32()
+                bytecode = s.bytes(bytecode_len)
 
-            const_pool: list[ConstType] = []
-            module = WLModule(module_name, cast(Runnable, None), const_pool)
+                const_pool.append(Runnable(module, args, bytecode))
+            else:
+                raise NotImplementedError(f"Unknown const pool entry {typ}")
+        
+        bytecode_runnable_id = s.int32()
+        module.root_runnable = cast(Runnable, const_pool[bytecode_runnable_id])
+        
+        self.module_cache[module_name] = module
+        return module
 
-            const_count = s.int32()
-            for _ in range(const_count):
-                typ = s.byte()
-                if typ == ConstEntry.STRING:
-                    const_pool.append(s.str())
-                elif typ == ConstEntry.INT:
-                    const_pool.append(s.varint())
-                elif typ == ConstEntry.RUNNABLE:
-                    argcount = s.byte()
-                    args: list[str] = []
-                    for _ in range(argcount):
-                        args.append(s.str())
-                    bytecode_len = s.int32()
-                    bytecode = s.bytes(bytecode_len)
+    def get_module_source(self, name: str):
+        for src in self.sources:
+            if (s := src.get_module(name)) is not None:
+                return s
+        raise NameError(f"Could not find module {name}")
 
-                    const_pool.append(Runnable(module, args, bytecode))
-                else:
-                    raise NotImplementedError(f"Unknown const pool entry {typ}")
-            
-            bytecode_length = s.int32()
-            module.root_runnable = Runnable(module, [], s.bytes(bytecode_length))
-            
-            self.modules[module_name] = module
-
-    def executor_solo(self, module: str):
-        mod = self.modules[module]
+    def load_module(self, name: str):
+        if name in self.module_cache:
+            return self.module_cache[name]
+        
+        mod = self.load_from_bytes(self.get_module_source(name))
         ctx = RunnableContext(mod, mod.root_runnable.bytecode, None)
 
         executor = Executor(self)

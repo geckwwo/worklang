@@ -80,6 +80,7 @@ class Module:
     
     def dump(self):
         assert self.bytecode is not None
+        intro_runnable = self.push_const(RunnableEntry([], self.bytecode))
 
         result = bytearray()
 
@@ -102,8 +103,7 @@ class Module:
             else:
                 raise NotImplementedError(f"Cannot serialize const pool entry {entry}")
 
-        result.extend(Encoder.int32(len(self.bytecode)))
-        result.extend(self.bytecode)
+        result.extend(Encoder.int32(intro_runnable))
         return result
 
 class Compiler:
@@ -200,12 +200,10 @@ class Compiler:
         ptr = self.module_stack[-1].push_const(node.iden)
         return bytearray([Opcodes.GET, *Encoder.int32(ptr)])
 
-    def dump(self):
-        result = bytearray()
-        result.extend(MAGIC)
+    def dump_vfs(self):
+        vfs: dict[str, bytearray | bytes] = {}
         
-        result.extend(Encoder.int32(len(self.module_cache.values())))
         for module in self.module_cache.values():
-            result.extend(module.dump())
+            vfs[module.get_name()] = module.dump()
 
-        return result
+        return vfs
