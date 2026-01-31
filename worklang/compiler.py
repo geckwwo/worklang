@@ -1,4 +1,4 @@
-from .parser import Node, CallNode, ConstNode, IdenNode, ModuleDeclNode, DiscardNode, BinOpNode, AnonProcDeclNode, AssignNode, ForNode, ReturnNode, AssignAndReturnNode, AttrNode, WhileNode, DeclWrapNode, TagNode, UseNode
+from .parser import Node, CallNode, ConstNode, IdenNode, ModuleDeclNode, DiscardNode, BinOpNode, AnonProcDeclNode, AssignNode, ForNode, ReturnNode, AssignAndReturnNode, AttrNode, WhileNode, TagNode, UseNode, BinOpType
 from .lexer import TokenType
 import struct
 from dataclasses import dataclass
@@ -11,6 +11,10 @@ class Encoder:
         encoded = s.encode()
         return cls.int32(len(encoded)) + encoded
     
+    @classmethod
+    def int32_signed(cls, i: int):
+        return i.to_bytes(4, "big", signed=True)
+
     @classmethod
     def int32(cls, i: int):
         return i.to_bytes(4, "big")
@@ -43,6 +47,7 @@ class Opcodes:
     NOP = 0x00 # not used by compiler, but must be implemented in VM
     PUSH_CONST = 0x01
     PUSH_NIL = 0x02
+    DUP = 0x03
 
     GET = 0x0A
     SET_GLOBAL = 0x0B
@@ -53,6 +58,16 @@ class Opcodes:
 
     ADD = 0x20
     MULTIPLY = 0x21
+    SUB = 0x22
+    DIV = 0x23
+    LESSTHAN = 0x24
+
+    LOGICNOT = 0x30
+
+    GETATTR = 0x40
+
+    JMP = 0x50
+    JMP_IF = 0x51
 
     RETURN = 0x7F
     DISCARD = 0x80
@@ -140,12 +155,28 @@ class Compiler:
             return self.visit_node(CallNode(IdenNode("__СисВызов_СоздатьТэг1"), [ConstNode(node.tag)]))
         return self.visit_node(CallNode(IdenNode("__СисВызов_СоздатьТэг2"), [ConstNode(node.tag), node.value]))
 
+    def assign_node_setter(self, to: Node):
+        assert isinstance(to, IdenNode), f"TODO {to}"
+
+        name_ptr = self.module_stack[-1].push_const(to.iden)
+
+        return bytearray([Opcodes.SET, *Encoder.int32(name_ptr)])
+
     def visit_node_AssignNode(self, node: AssignNode):
-        assert isinstance(node.to, IdenNode), f"TODO {node.to} {type(node.to)}"
+        return bytearray([*self.visit_node(node.value), *self.assign_node_setter(node.to)])
 
-        name_ptr = self.module_stack[-1].push_const(node.to.iden)
+    def visit_node_AttrNode(self, node: AttrNode):
+        attr_ptr = self.module_stack[-1].push_const(node.attr)
+        return bytearray([*self.visit_node(node.obj), Opcodes.GETATTR, *Encoder.int32(attr_ptr)])
 
-        return bytearray([*self.visit_node(node.value), Opcodes.SET, *Encoder.int32(name_ptr)])
+    def visit_node_AssignAndReturnNode(self, node: AssignAndReturnNode):
+        return bytearray([*self.visit_node(node.value), Opcodes.DUP, *self.assign_node_setter(node.to)])
+
+    def visit_node_WhileNode(self, node: WhileNode):
+        body = b"".join(self.visit_node(x) for x in node.body)
+        intro = bytearray([*self.visit_node(node.cond), Opcodes.LOGICNOT, Opcodes.JMP_IF, *Encoder.int32_signed(len(body) + 5)])
+        outro = bytearray([Opcodes.JMP, *Encoder.int32_signed(-len(intro)-len(body)-5)])
+        return bytearray([*intro, *body, *outro])
 
     def visit_node_ReturnNode(self, node: ReturnNode):
         if node.value is None:
@@ -183,8 +214,9 @@ class Compiler:
     
     def visit_node_BinOpNode(self, node: BinOpNode):
         ops = {
-            TokenType.Plus: Opcodes.ADD,
-            TokenType.Multiply: Opcodes.MULTIPLY
+            BinOpType.Add: Opcodes.ADD,
+            BinOpType.Mul: Opcodes.MULTIPLY,
+            BinOpType.Lt: Opcodes.LESSTHAN
         }
         return bytearray([*self.visit_node(node.left), *self.visit_node(node.right), ops[node.op]])
 

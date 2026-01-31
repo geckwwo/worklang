@@ -35,6 +35,7 @@ class ExecutorStepResult(enum.Enum):
 class BinOperation(enum.Enum):
     ADD = 1
     MULTIPLY = 2
+    LT = 3
 
 def operate_bi(left: WLObject, right: WLObject, op: BinOperation):
     match left.object_type:
@@ -46,6 +47,8 @@ def operate_bi(left: WLObject, right: WLObject, op: BinOperation):
                     v = left.value + right.value
                 case BinOperation.MULTIPLY:
                     v = left.value * right.value
+                case BinOperation.LT:
+                    return WLObject(Primitives.Bool, left.value < right.value)
                 case _:
                     raise NotImplementedError(f"unknown op {op}")
             return WLObject(Primitives.Number, v)
@@ -83,6 +86,7 @@ class RunnableContext:
         if self.bs.over():
             return ExecutorStepResult.END, NIL
         opcode = self.bs.byte()
+
         
         if opcode == Opcodes.NOP:
             pass
@@ -134,6 +138,24 @@ class RunnableContext:
             assert v.object_type == Primitives.Runnable
             r: Runnable = v.value
             r.parent_scope = self
+        elif opcode == Opcodes.LOGICNOT:
+            v = self.stack.pop()
+            assert v.object_type == Primitives.Bool
+            self.stack.append(WLObject(Primitives.Bool, not v.value)) # type: ignore
+        elif opcode == Opcodes.JMP_IF:
+            cond = self.stack.pop()
+            reladdr = self.bs.int32_sign()
+
+            assert cond.object_type == Primitives.Bool
+            if cond.value:
+                self.bs.idx += reladdr
+        elif opcode == Opcodes.JMP:
+            reladdr = self.bs.int32_sign()
+            self.bs.idx += reladdr
+        elif opcode == Opcodes.LESSTHAN:
+            right = self.stack.pop()
+            left = self.stack.pop()
+            self.stack.append(operate_bi(left, right, BinOperation.LT))
         else:
             raise NotImplementedError(f"Unknown opcode {hex(opcode)}")
         return ExecutorStepResult.CONTINUE, None
@@ -180,6 +202,10 @@ class ByteStream:
         return val
     def int32(self):
         val = int.from_bytes(self.arr[self.idx:self.idx+4], "big")
+        self.idx += 4
+        return val
+    def int32_sign(self):
+        val = int.from_bytes(self.arr[self.idx:self.idx+4], "big", signed=True)
         self.idx += 4
         return val
     def str(self):

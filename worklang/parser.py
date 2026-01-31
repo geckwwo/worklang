@@ -1,4 +1,5 @@
 from .lexer import TokenType, Token, Keyword
+from enum import Enum
 
 class Node:
     def __repr__(self):
@@ -27,8 +28,15 @@ class ModuleDeclNode(Node):
     def __init__(self, modname: list[str]):
         self.modname = modname
 
+class BinOpType(Enum):
+    Add = 1
+    Mul = 2
+    Sub = 3
+    Div = 4
+    Lt = 5
+
 class BinOpNode(Node):
-    def __init__(self, left: Node, op: TokenType, right: Node):
+    def __init__(self, left: Node, op: BinOpType, right: Node):
         self.left = left
         self.op = op
         self.right = right
@@ -173,6 +181,14 @@ class Parser:
                 self.next()
                 value = self.expr()
                 v = AssignNode(v.value, value)
+            elif self.tok.type in (TokenType.InlineAdd, TokenType.InlineMul):
+                op = {
+                    TokenType.InlineAdd: BinOpType.Add,
+                    TokenType.InlineMul: BinOpType.Mul
+                }[self.tok.type]
+                self.next()
+                value = self.expr()
+                v = AssignNode(v.value, BinOpNode(v.value, op, value))
 
         assert self.tok.type == TokenType.Semicolon, "';' expected"
         self.next()
@@ -234,13 +250,24 @@ class Parser:
         return ModuleDeclNode(modname)
 
     def expr(self):
-        return self.expr_add()
+        return self.expr_compare()
+    
+    def expr_compare(self):
+        v = self.expr_add()
+        while self.tok.value in (Keyword.LessThan,):
+            t = {
+                Keyword.LessThan: BinOpType.Lt
+            }[self.tok.value]
+            self.next()
+            v = BinOpNode(v, t, self.expr())
+
+        return v
     
     def expr_add(self) -> Node:
         v = self.expr_mul()
 
         while self.tok.type in (TokenType.Plus,):
-            t = self.tok.type
+            t = BinOpType.Add if self.tok.type == TokenType.Plus else BinOpType.Sub
             self.next()
             right = self.expr()
             v = BinOpNode(v, t, right)
@@ -251,7 +278,7 @@ class Parser:
         v = self.call()
 
         while self.tok.type in (TokenType.Multiply,):
-            t = self.tok.type
+            t = BinOpType.Mul if self.tok.type == TokenType.Multiply else BinOpType.Div
             self.next()
             right = self.expr()
             v = BinOpNode(v, t, right)

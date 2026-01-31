@@ -32,8 +32,11 @@ class TokenType(enum.Enum):
     Assign = 1001
     Equ = 1002
 
-    Plus = "+"
-    Multiply = "*"
+    Plus = 1010
+    Multiply = 1011
+
+    InlineAdd = 1100
+    InlineMul = 1101
 
 class Keyword(enum.Enum):
     Use = "использовать"
@@ -48,6 +51,14 @@ class Keyword(enum.Enum):
     Return = "вернуть"
     For = "для"
     In = "в"
+    LessThan = "меньше"
+
+DOUBLES = {
+    "=": ("=", TokenType.Assign, TokenType.Equ),
+    "+": ("=", TokenType.Plus, TokenType.InlineAdd),
+    "*": ("=", TokenType.Multiply, TokenType.InlineMul)
+}
+DOUBLES_INIT = tuple(x[0][0] for x in DOUBLES.keys())
 
 KEYWORDS = list(x.value for x in Keyword)
 TOKENTYPES = list(x.value for x in TokenType)
@@ -116,13 +127,14 @@ class Lexer:
                 self.next()
 
                 tokens.append(Token(TokenType.String, s))
-            elif self.ch == "=":
+            elif self.ch in DOUBLES_INIT:
+                double = DOUBLES[self.ch]
                 self.next()
-                if self.ch == "=":
+                if self.ch == double[0]:
                     self.next()
-                    tokens.append(Token(TokenType.Equ))
+                    tokens.append(Token(double[2]))
                 else:
-                    tokens.append(Token(TokenType.Assign))
+                    tokens.append(Token(double[1]))
             else:
                 raise LexerException(f"Неизвестный символ '{self.ch}'")
 
