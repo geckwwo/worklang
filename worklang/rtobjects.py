@@ -6,6 +6,7 @@ class Primitives(enum.Enum):
     String = 2
     Bool = 3
     Runnable = 4
+    Module = 5
     Nil = -67
 
 class WLObject:

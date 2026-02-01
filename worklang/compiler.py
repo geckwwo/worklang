@@ -1,5 +1,4 @@
 from .parser import Node, CallNode, ConstNode, IdenNode, ModuleDeclNode, DiscardNode, BinOpNode, AnonProcDeclNode, AssignNode, ForNode, ReturnNode, AssignAndReturnNode, AttrNode, WhileNode, TagNode, UseNode, BinOpType
-from .lexer import TokenType
 import struct
 from dataclasses import dataclass
 
